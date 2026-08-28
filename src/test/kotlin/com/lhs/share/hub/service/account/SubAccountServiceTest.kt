@@ -11,6 +11,7 @@ import com.lhs.share.hub.repository.OperatorGrowthTargetRepository
 import com.lhs.share.hub.repository.OperatorRecordRepository
 import com.lhs.share.hub.repository.OperatorUpgradeTransactionRepository
 import com.lhs.share.hub.repository.OperatorV3ImportRecordRepository
+import com.lhs.share.hub.repository.StarInventoryCurrentRepository
 import com.lhs.share.hub.repository.SubAccountRepository
 import com.lhs.share.hub.repository.entity.SubAccount
 import com.lhs.share.hub.service.inventory.InventoryApiException
@@ -47,6 +48,7 @@ class SubAccountServiceTest {
     private val targetRepository = mockk<OperatorGrowthTargetRepository>()
     private val upgradeRepository = mockk<OperatorUpgradeTransactionRepository>()
     private val revisionRepository = mockk<InventoryRevisionRepository>()
+    private val starInventoryCurrentRepository = mockk<StarInventoryCurrentRepository>()
     private val transactionTemplate = TransactionTemplate(
         object : PlatformTransactionManager {
             override fun getTransaction(definition: TransactionDefinition?): TransactionStatus = SimpleTransactionStatus()
@@ -69,6 +71,7 @@ class SubAccountServiceTest {
         targetRepository,
         upgradeRepository,
         revisionRepository,
+        starInventoryCurrentRepository,
     )
 
     @Test
@@ -116,6 +119,7 @@ class SubAccountServiceTest {
         verify(exactly = 0) { annotationRepository.deleteAllByUserIdAndAccountId(any(), any()) }
         verify(exactly = 0) { targetRepository.deleteAllByUserIdAndAccountId(any(), any()) }
         verify(exactly = 0) { upgradeRepository.deleteAllByUserIdAndAccountId(any(), any()) }
+        verify(exactly = 0) { starInventoryCurrentRepository.deleteAllByUserIdAndAccountId(any(), any()) }
     }
 
     @Test
@@ -185,6 +189,7 @@ class SubAccountServiceTest {
         every { targetRepository.deleteAllByUserIdAndAccountId("u1", "main") } just runs
         every { upgradeRepository.deleteAllByUserIdAndAccountId("u1", "main") } just runs
         every { revisionRepository.deleteByUserIdAndAccountId("u1", "main") } returns 1
+        every { starInventoryCurrentRepository.deleteAllByUserIdAndAccountId("u1", "main") } just runs
         every { tokenService.revokeByAccount("u1", "main") } just runs
         every { accountRepository.deleteById("mongo-id") } just runs
 
@@ -201,6 +206,7 @@ class SubAccountServiceTest {
         verify(exactly = 1) { targetRepository.deleteAllByUserIdAndAccountId("u1", "main") }
         verify(exactly = 1) { upgradeRepository.deleteAllByUserIdAndAccountId("u1", "main") }
         verify(exactly = 1) { revisionRepository.deleteByUserIdAndAccountId("u1", "main") }
+        verify(exactly = 1) { starInventoryCurrentRepository.deleteAllByUserIdAndAccountId("u1", "main") }
         verify(exactly = 1) { tokenService.revokeByAccount("u1", "main") }
         verify(exactly = 1) { accountRepository.deleteById("mongo-id") }
     }

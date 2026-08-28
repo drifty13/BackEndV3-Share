@@ -29,6 +29,7 @@ class AuthenticationEntryPointImpl(
         dataTransferService.writeJson(response, result, HttpStatus.UNAUTHORIZED.value())
     }
 
-    private fun HttpServletRequest.isInventoryRequest(): Boolean =
-        requestURI.startsWith("/v1/inventory") || requestURI.startsWith("/open-api/inventory")
+    private fun HttpServletRequest.isInventoryRequest(): Boolean = requestURI.startsWith("/v1/inventory") ||
+        requestURI.startsWith("/open-api/inventory") ||
+        requestURI.startsWith("/v1/star-inventory")
 }

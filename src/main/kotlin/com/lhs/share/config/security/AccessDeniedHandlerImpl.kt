@@ -27,6 +27,7 @@ class AccessDeniedHandlerImpl(private val dataTransferService: DataTransferServi
         dataTransferService.writeJson(response, result, HttpStatus.FORBIDDEN.value())
     }
 
-    private fun HttpServletRequest.isInventoryRequest(): Boolean =
-        requestURI.startsWith("/v1/inventory") || requestURI.startsWith("/open-api/inventory")
+    private fun HttpServletRequest.isInventoryRequest(): Boolean = requestURI.startsWith("/v1/inventory") ||
+        requestURI.startsWith("/open-api/inventory") ||
+        requestURI.startsWith("/v1/star-inventory")
 }

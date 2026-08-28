@@ -5,6 +5,7 @@ import com.lhs.share.hub.controller.account.AccountController
 import com.lhs.share.hub.controller.inventory.InventoryController
 import com.lhs.share.hub.controller.inventory.response.InventoryError
 import com.lhs.share.hub.controller.inventory.response.InventoryErrorResponse
+import com.lhs.share.hub.controller.starinventory.StarInventoryController
 import com.lhs.share.hub.service.inventory.InventoryApiException
 import com.lhs.share.openapi.OpenApiInventoryController
 import io.github.oshai.kotlinlogging.KotlinLogging
@@ -25,7 +26,12 @@ private val inventoryLog = KotlinLogging.logger { }
 
 @Order(Ordered.HIGHEST_PRECEDENCE)
 @RestControllerAdvice(
-    assignableTypes = [AccountController::class, InventoryController::class, OpenApiInventoryController::class],
+    assignableTypes = [
+        AccountController::class,
+        InventoryController::class,
+        OpenApiInventoryController::class,
+        StarInventoryController::class,
+    ],
 )
 class InventoryExceptionHandler {
     @ExceptionHandler(InventoryApiException::class)

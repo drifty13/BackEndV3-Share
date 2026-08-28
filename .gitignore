@@ -19,3 +19,4 @@ application-prod.yml
 .tools/
 .env
 .agent-teams
+prompts/
