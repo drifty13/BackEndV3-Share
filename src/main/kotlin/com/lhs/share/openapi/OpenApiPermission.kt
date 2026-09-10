@@ -28,6 +28,7 @@ enum class OpenApiPermission(
     OPERATOR_WRITE(code = 20002, key = "operator:write", desc = "密探数据写入"),
     OPERATOR_EXPORT(code = 20003, key = "operator:export", desc = "密探数据导出"),
     OPERATOR_SCAN_WRITE(code = 20004, key = "operator:scan:write", desc = "密探自动采集写入"),
+    STAR_CAPTURE_WRITE(code = 30001, key = "star:capture:write", desc = "上传星石背包临时采集结果"),
     ;
 
     companion object {
