@@ -20,3 +20,6 @@ application-prod.yml
 .env
 .agent-teams
 data/private-media
+# Local development / smoke artifacts
+prompts/
+data/star-captures/
