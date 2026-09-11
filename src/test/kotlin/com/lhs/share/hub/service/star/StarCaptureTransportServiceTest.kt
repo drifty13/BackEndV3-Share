@@ -53,7 +53,9 @@ class StarCaptureTransportServiceTest {
         val loadedManifest = service.manifest("u1", "acc1", "capture-a")
         assertEquals(6, loadedManifest.images.size)
         assertEquals("overlap", loadedManifest.adjacentRelations.single().relation)
-        assertTrue(service.image("u1", "acc1", "capture-a", "capture-a:main:000").inputStream.readBytes().decodeToString().endsWith("png-0"))
+        assertTrue(
+            service.image("u1", "acc1", "capture-a", "capture-a:main:000").inputStream.readBytes().decodeToString().endsWith("png-0"),
+        )
         assertThrows(InventoryApiException::class.java) { service.manifest("u2", "acc1", "capture-a") }
         verify(exactly = 1) { eventService.publish("u1", "acc1", "star_capture_ready", any(), capture(event)) }
         val payload = event.captured as StarCaptureReadyEvent
@@ -75,12 +77,63 @@ class StarCaptureTransportServiceTest {
     }
 
     @Test
+    fun `full CaptureBatchV1 keeps all three sections, global order and account isolation`() {
+        val event = slot<Any>()
+        val upload = service.upload("u1", "acc1", fullManifest(), fullFiles())
+
+        assertEquals("full", upload.section)
+        assertEquals(4, upload.imageCount)
+        val loaded = service.manifest("u1", "acc1", "capture-full")
+        assertEquals("maayuan", loaded.source)
+        assertEquals(listOf("main", "support", "experience"), loaded.sections!!.keys.toList())
+        assertEquals(listOf(1, 2, 3, 4), loaded.images.map { it.sourceOrder })
+        assertEquals("overlap", loaded.sections.getValue("main").adjacentRelations.single().relation)
+        assertTrue(
+            service.image(
+                "u1",
+                "acc1",
+                "capture-full",
+                "capture-full:support:000",
+            ).inputStream.readBytes().decodeToString().endsWith("support"),
+        )
+        assertThrows(InventoryApiException::class.java) { service.manifest("u1", "acc2", "capture-full") }
+        verify(exactly = 1) { eventService.publish("u1", "acc1", "star_capture_ready", any(), capture(event)) }
+        val payload = event.captured as StarCaptureReadyEvent
+        assertEquals("full", payload.section)
+        assertEquals(4, payload.imageCount)
+    }
+
+    @Test
+    fun `full CaptureBatchV1 rejects malformed experience and duplicate file names`() {
+        assertInvalid(fullManifest().replace("\"stop_reason\":\"single_capture\"", "\"stop_reason\":\"bottom_no_move\""), fullFiles())
+        assertInvalid(fullManifest().replace("support-000.png", "main-000.png"), fullFiles())
+    }
+
+    @Test
     fun `manifest rejects missing files duplicate ids invalid relations and traversal names`() {
         assertInvalid(manifest(), files().dropLast(1))
         assertInvalid(manifest(sourceIds = listOf("duplicate", "duplicate", "id2", "id3", "id4", "id5")), files())
         assertInvalid(manifest(relationPrevious = "unknown"), files())
-        assertInvalid(manifest(fileNames = listOf("../capture-00.png", "capture-01.png", "capture-02.png", "capture-03.png", "capture-04.png", "capture-05.png")), files())
-        assertInvalid(manifest(), files().toMutableList().also { it[0] = MockMultipartFile("files", "capture-00.png", MediaType.IMAGE_PNG_VALUE, "not-a-png".toByteArray()) })
+        assertInvalid(
+            manifest(
+                fileNames = listOf(
+                    "../capture-00.png",
+                    "capture-01.png",
+                    "capture-02.png",
+                    "capture-03.png",
+                    "capture-04.png",
+                    "capture-05.png",
+                ),
+            ),
+            files(),
+        )
+        assertInvalid(
+            manifest(),
+            files().toMutableList().also {
+                it[0] =
+                    MockMultipartFile("files", "capture-00.png", MediaType.IMAGE_PNG_VALUE, "not-a-png".toByteArray())
+            },
+        )
     }
 
     @Test
@@ -117,17 +170,56 @@ class StarCaptureTransportServiceTest {
         fileNames: List<String> = (0..5).map { "capture-${it.toString().padStart(2, '0')}.png" },
         relationPrevious: String = "capture-a:main:004",
     ): String = buildString {
-        append("{\"schema_version\":1,\"capture_id\":\"capture-a\",\"game_version\":\"如鸢\",\"section\":\"main\",\"stop_reason\":\"bottom_no_move\",\"images\":[")
+        append(
+            "{\"schema_version\":1,\"capture_id\":\"capture-a\",\"game_version\":\"如鸢\",\"section\":\"main\",\"stop_reason\":\"bottom_no_move\",\"images\":[",
+        )
         sourceIds.forEachIndexed { index, sourceId ->
             if (index > 0) append(',')
-            append("{\"source_image_id\":\"").append(sourceId).append("\",\"source_order\":").append(index + 1).append(",\"file_name\":\"").append(fileNames[index]).append("\"}")
+            append(
+                "{\"source_image_id\":\"",
+            ).append(
+                sourceId,
+            ).append("\",\"source_order\":").append(index + 1).append(",\"file_name\":\"").append(fileNames[index]).append("\"}")
         }
-        append("],\"adjacent_relations\":[{\"previous_source_image_id\":\"").append(relationPrevious).append("\",\"current_source_image_id\":\"capture-a:main:005\",\"relation\":\"overlap\"}]}")
+        append(
+            "],\"adjacent_relations\":[{\"previous_source_image_id\":\"",
+        ).append(relationPrevious).append("\",\"current_source_image_id\":\"capture-a:main:005\",\"relation\":\"overlap\"}]}")
     }
+
+    private fun fullFiles(): List<MockMultipartFile> = listOf(
+        fullFile("main-000.png", "main-0"),
+        fullFile("main-001.png", "main-1"),
+        fullFile("support-000.png", "support"),
+        fullFile("experience-000.png", "experience"),
+    )
+
+    private fun fullFile(name: String, contents: String) = MockMultipartFile(
+        "files",
+        name,
+        MediaType.IMAGE_PNG_VALUE,
+        PNG_SIGNATURE + contents.toByteArray(),
+    )
+
+    private fun fullManifest(): String = """
+        {"schema_version":1,"capture_id":"capture-full","source":"maayuan","game_version":"如鸢","sections":{
+          "main":{"images":[
+            {"source_image_id":"capture-full:main:000","source_order":1,"file_name":"main-000.png"},
+            {"source_image_id":"capture-full:main:001","source_order":2,"file_name":"main-001.png"}],
+            "adjacent_relations":[{"previous_source_image_id":"capture-full:main:000","current_source_image_id":"capture-full:main:001","relation":"overlap"}],"complete":true,"stop_reason":"bottom_no_move"},
+          "support":{"images":[{"source_image_id":"capture-full:support:000","source_order":3,"file_name":"support-000.png"}],"adjacent_relations":[],"complete":true,"stop_reason":"bottom_no_move"},
+          "experience":{"images":[{"source_image_id":"capture-full:experience:000","source_order":4,"file_name":"experience-000.png"}],"adjacent_relations":[],"complete":true,"stop_reason":"single_capture"}}}
+    """.trimIndent()
 
     companion object {
         private val PNG_SIGNATURE = byteArrayOf(
-            0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+            0x89.toByte(),
+            0x50,
+            0x4E,
+            0x47,
+            0x0D,
+            0x0A,
+            0x1A,
+            0x0A,
         )
     }
 }

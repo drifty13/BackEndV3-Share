@@ -18,7 +18,8 @@ class OpenApiStarCaptureControllerContractTest {
     @Test
     fun `upload requires the dedicated scope and only forwards the token bound account`() {
         val files = listOf(MockMultipartFile("files", "capture-00.png", "image/png", byteArrayOf(1)))
-        every { tokenService.validateAuthorization("Bearer star", OpenApiPermission.STAR_CAPTURE_WRITE) } returns OpenApiPrincipal("u1", "acc1")
+        every { tokenService.validateAuthorization("Bearer star", OpenApiPermission.STAR_CAPTURE_WRITE) } returns
+            OpenApiPrincipal("u1", "acc1")
         every { captureService.upload("u1", "acc1", "{}", files) } returns StarCaptureUploadResponse("capture", "main", 1, Instant.EPOCH)
 
         val response = controller.upload("Bearer star", "{}", files)

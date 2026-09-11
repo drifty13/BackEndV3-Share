@@ -154,13 +154,20 @@ class StarCaptureTransportService(
         } catch (_: Exception) {
             invalid("manifest 不是有效 JSON")
         }
-        if (node.fieldNames().asSequence().any { it !in MANIFEST_FIELDS }) invalid("manifest 包含未知字段")
+        return if (node.has("sections")) parseFullManifest(node, files) else parseLegacyManifest(node, files)
+    }
+
+    /** B4 remains a deliberately separate flat-main compatibility branch. */
+    private fun parseLegacyManifest(node: ObjectNode, files: List<MultipartFile>): StarCaptureManifest {
+        if (node.fieldNames().asSequence().any { it !in LEGACY_MANIFEST_FIELDS }) invalid("manifest 包含未知字段")
         val schemaVersion = node.path("schema_version").asInt(-1)
         val captureId = node.path("capture_id").asText().trim()
         val gameVersion = node.path("game_version").asText().trim()
         val section = node.path("section").asText().trim()
         val stopReason = node.path("stop_reason").asText().trim()
-        if (schemaVersion != 1 || !SAFE_ID.matches(captureId) || gameVersion !in GAMES || section != "main" || stopReason != "bottom_no_move") {
+        if (schemaVersion != 1 || !SAFE_ID.matches(captureId) || gameVersion !in GAMES || section != "main" ||
+            stopReason != "bottom_no_move"
+        ) {
             invalid("manifest 字段无效")
         }
         val imagesNode = node.path("images")
@@ -173,9 +180,15 @@ class StarCaptureTransportService(
             if (!SAFE_ID.matches(sourceImageId) || sourceOrder != index + 1 || !SAFE_PNG.matches(fileName)) invalid("manifest 图片字段无效")
             StarCaptureImage(sourceImageId, sourceOrder, fileName)
         }
-        if (images.map(StarCaptureImage::sourceImageId).toSet().size != images.size || images.map(StarCaptureImage::fileName).toSet().size != images.size) invalid("manifest 图片重复")
+        if (images.map(StarCaptureImage::sourceImageId).toSet().size != images.size ||
+            images.map(StarCaptureImage::fileName).toSet().size != images.size
+        ) {
+            invalid("manifest 图片重复")
+        }
         val uploaded = files.associateBy { it.originalFilename }
-        if (uploaded.size != files.size || uploaded.keys != images.map(StarCaptureImage::fileName).toSet() || files.any { it.isEmpty || it.contentType?.substringBefore(';') != "image/png" || !hasPngSignature(it) }) {
+        if (uploaded.size != files.size || uploaded.keys != images.map(StarCaptureImage::fileName).toSet() ||
+            files.any { it.isEmpty || it.contentType?.substringBefore(';') != "image/png" || !hasPngSignature(it) }
+        ) {
             invalid("PNG 文件与 manifest 不匹配")
         }
         val relationsNode = node.path("adjacent_relations")
@@ -183,14 +196,119 @@ class StarCaptureTransportService(
         val imageIds = images.map(StarCaptureImage::sourceImageId).toSet()
         val orders = images.associate { it.sourceImageId to it.sourceOrder }
         val relations = relationsNode.map { relation ->
-            if (!relation.isObject || relation.fieldNames().asSequence().any { it !in RELATION_FIELDS }) invalid("manifest overlap relation 无效")
+            if (!relation.isObject ||
+                relation.fieldNames().asSequence().any { it !in RELATION_FIELDS }
+            ) {
+                invalid("manifest overlap relation 无效")
+            }
             val previous = relation.path("previous_source_image_id").asText().trim()
             val current = relation.path("current_source_image_id").asText().trim()
-            if (relation.path("relation").asText() != "overlap" || previous !in imageIds || current !in imageIds || orders.getValue(current) != orders.getValue(previous) + 1) invalid("manifest overlap relation 无效")
+            if (relation.path("relation").asText() != "overlap" || previous !in imageIds || current !in imageIds ||
+                orders.getValue(current) != orders.getValue(previous) + 1
+            ) {
+                invalid("manifest overlap relation 无效")
+            }
             StarCaptureRelation(previous, current)
         }
-        if (relations.map { it.previousSourceImageId to it.currentSourceImageId }.toSet().size != relations.size) invalid("manifest overlap relation 重复")
+        if (relations.map { it.previousSourceImageId to it.currentSourceImageId }.toSet().size !=
+            relations.size
+        ) {
+            invalid("manifest overlap relation 重复")
+        }
         return StarCaptureManifest(schemaVersion, captureId, gameVersion, section, stopReason, images, relations)
+    }
+
+    private fun parseFullManifest(node: ObjectNode, files: List<MultipartFile>): StarCaptureManifest {
+        if (node.fieldNames().asSequence().any { it !in FULL_MANIFEST_FIELDS }) invalid("manifest 包含未知字段")
+        val schemaVersion = node.path("schema_version").asInt(-1)
+        val captureId = node.path("capture_id").asText().trim()
+        val source = node.path("source").asText().trim()
+        val gameVersion = node.path("game_version").asText().trim()
+        if (schemaVersion != 1 || !SAFE_ID.matches(captureId) || source != "maayuan" || gameVersion !in GAMES) invalid("manifest 字段无效")
+        val sectionsNode = node.path("sections")
+        if (!sectionsNode.isObject || sectionsNode.fieldNames().asSequence().toSet() != SECTION_NAMES) invalid("manifest sections 无效")
+        val seenIds = mutableSetOf<String>()
+        val seenNames = mutableSetOf<String>()
+        val sections = linkedMapOf<String, StarCaptureSection>()
+        for (sectionName in SECTION_ORDER) {
+            val sectionNode = sectionsNode.path(sectionName)
+            val section = parseFullSection(sectionName, sectionNode, seenIds, seenNames)
+            sections[sectionName] = section
+        }
+        val images = sections.values.flatMap { it.images }.sortedBy { it.sourceOrder }
+        if (images.map { it.sourceOrder } != (1..images.size).toList()) invalid("manifest source_order 必须全局连续")
+        val uploaded = files.associateBy { it.originalFilename }
+        if (uploaded.size != files.size || uploaded.keys != seenNames ||
+            files.any { it.isEmpty || it.contentType?.substringBefore(';') != "image/png" || !hasPngSignature(it) }
+        ) {
+            invalid("PNG 文件与 manifest 不匹配")
+        }
+        return StarCaptureManifest(
+            schemaVersion = schemaVersion,
+            captureId = captureId,
+            gameVersion = gameVersion,
+            section = "full",
+            stopReason = "full_capture",
+            images = images,
+            adjacentRelations = emptyList(),
+            source = source,
+            sections = sections,
+        )
+    }
+
+    private fun parseFullSection(
+        sectionName: String,
+        node: com.fasterxml.jackson.databind.JsonNode,
+        seenIds: MutableSet<String>,
+        seenNames: MutableSet<String>,
+    ): StarCaptureSection {
+        if (!node.isObject || node.fieldNames().asSequence().any { it !in SECTION_FIELDS }) invalid("manifest section 字段无效")
+        val complete = node.path("complete").asBoolean(false)
+        val stopReason = node.path("stop_reason").asText().trim()
+        val expectedStopReason = if (sectionName == "experience") "single_capture" else "bottom_no_move"
+        if (!complete || stopReason != expectedStopReason) invalid("manifest section 未完整采集")
+        val imagesNode = node.path("images")
+        val relationsNode = node.path("adjacent_relations")
+        if (!imagesNode.isArray || !relationsNode.isArray ||
+            (sectionName != "experience" && imagesNode.isEmpty)
+        ) {
+            invalid("manifest section 图片无效")
+        }
+        if (sectionName == "experience" && (imagesNode.size() != 1 || !relationsNode.isEmpty)) invalid("experience section 无效")
+        val images = imagesNode.map { image ->
+            if (!image.isObject || image.fieldNames().asSequence().any { it !in IMAGE_FIELDS }) invalid("manifest 图片字段无效")
+            val sourceImageId = image.path("source_image_id").asText().trim()
+            val sourceOrder = image.path("source_order").asInt(-1)
+            val fileName = image.path("file_name").asText().trim()
+            if (!SAFE_ID.matches(sourceImageId) || sourceOrder < 1 || !SAFE_PNG.matches(fileName) || !seenIds.add(sourceImageId) ||
+                !seenNames.add(fileName)
+            ) {
+                invalid("manifest 图片字段无效")
+            }
+            StarCaptureImage(sourceImageId, sourceOrder, fileName)
+        }
+        val orders = images.associate { it.sourceImageId to it.sourceOrder }
+        val relations = relationsNode.map { relation ->
+            if (!relation.isObject ||
+                relation.fieldNames().asSequence().any { it !in RELATION_FIELDS }
+            ) {
+                invalid("manifest overlap relation 无效")
+            }
+            val previous = relation.path("previous_source_image_id").asText().trim()
+            val current = relation.path("current_source_image_id").asText().trim()
+            if (relation.path("relation").asText() != "overlap" || previous !in orders || current !in orders ||
+                orders.getValue(current) != orders.getValue(previous) + 1
+            ) {
+                invalid("manifest overlap relation 无效")
+            }
+            StarCaptureRelation(previous, current)
+        }
+        if (relations.map { it.previousSourceImageId to it.currentSourceImageId }.toSet().size !=
+            relations.size
+        ) {
+            invalid("manifest overlap relation 重复")
+        }
+        return StarCaptureSection(images, relations, complete, stopReason)
     }
 
     private fun sameContent(existing: StoredCapture, manifest: StarCaptureManifest, files: List<MultipartFile>): Boolean {
@@ -220,7 +338,8 @@ class StarCaptureTransportService(
         Files.walk(directory).use { paths -> paths.sorted(Comparator.reverseOrder()).forEach { path -> Files.deleteIfExists(path) } }
     }
 
-    private fun invalid(message: String): Nothing = throw InventoryApiException(HttpStatus.UNPROCESSABLE_ENTITY, "star_capture_invalid", message)
+    private fun invalid(message: String): Nothing =
+        throw InventoryApiException(HttpStatus.UNPROCESSABLE_ENTITY, "star_capture_invalid", message)
     private fun conflict(message: String): Nothing = throw InventoryApiException(HttpStatus.CONFLICT, "star_capture_conflict", message)
     private fun missing(message: String): Nothing = throw InventoryApiException(HttpStatus.NOT_FOUND, "star_capture_not_found", message)
 
@@ -236,8 +355,18 @@ class StarCaptureTransportService(
         var consumed: Boolean = false,
     ) {
         fun toUploadResponse() = StarCaptureUploadResponse(manifest.captureId, manifest.section, manifest.images.size, createdAt)
-        fun toPendingResponse() = StarCapturePendingResponse(manifest.captureId, manifest.section, manifest.images.size, createdAt, expiresAt)
-        fun toManifestResponse() = StarCaptureManifestResponse(manifest.captureId, manifest.gameVersion, manifest.section, manifest.stopReason, manifest.images, manifest.adjacentRelations)
+        fun toPendingResponse() =
+            StarCapturePendingResponse(manifest.captureId, manifest.section, manifest.images.size, createdAt, expiresAt)
+        fun toManifestResponse() = StarCaptureManifestResponse(
+            captureId = manifest.captureId,
+            gameVersion = manifest.gameVersion,
+            section = manifest.section,
+            stopReason = manifest.stopReason,
+            images = manifest.images,
+            adjacentRelations = manifest.adjacentRelations,
+            source = manifest.source,
+            sections = manifest.sections,
+        )
     }
 
     companion object {
@@ -245,11 +374,23 @@ class StarCaptureTransportService(
         private val SAFE_ID = Regex("[A-Za-z0-9:_-]{1,160}")
         private val SAFE_PNG = Regex("[A-Za-z0-9._-]{1,180}\\.png")
         private val GAMES = setOf("如鸢", "代号鸢")
-        private val MANIFEST_FIELDS = setOf("schema_version", "capture_id", "game_version", "section", "stop_reason", "images", "adjacent_relations")
+        private val LEGACY_MANIFEST_FIELDS =
+            setOf("schema_version", "capture_id", "game_version", "section", "stop_reason", "images", "adjacent_relations")
+        private val FULL_MANIFEST_FIELDS = setOf("schema_version", "capture_id", "source", "game_version", "sections")
+        private val SECTION_NAMES = setOf("main", "support", "experience")
+        private val SECTION_ORDER = listOf("main", "support", "experience")
+        private val SECTION_FIELDS = setOf("images", "adjacent_relations", "complete", "stop_reason")
         private val IMAGE_FIELDS = setOf("source_image_id", "source_order", "file_name")
         private val RELATION_FIELDS = setOf("previous_source_image_id", "current_source_image_id", "relation")
         private val PNG_SIGNATURE = byteArrayOf(
-            0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+            0x89.toByte(),
+            0x50,
+            0x4E,
+            0x47,
+            0x0D,
+            0x0A,
+            0x1A,
+            0x0A,
         )
     }
 }
@@ -262,6 +403,8 @@ data class StarCaptureManifest(
     val stopReason: String,
     val images: List<StarCaptureImage>,
     val adjacentRelations: List<StarCaptureRelation>,
+    val source: String? = null,
+    val sections: Map<String, StarCaptureSection>? = null,
 )
 
 data class StarCaptureImage(val sourceImageId: String, val sourceOrder: Int, val fileName: String)
@@ -270,8 +413,36 @@ data class StarCaptureRelation(
     val currentSourceImageId: String,
     val relation: String = "overlap",
 )
+data class StarCaptureSection(
+    val images: List<StarCaptureImage>,
+    val adjacentRelations: List<StarCaptureRelation>,
+    val complete: Boolean,
+    val stopReason: String,
+)
 data class StarCaptureUploadResponse(val captureId: String, val section: String, val imageCount: Int, val createdAt: Instant)
-data class StarCapturePendingResponse(val captureId: String, val section: String, val imageCount: Int, val createdAt: Instant, val expiresAt: Instant)
-data class StarCaptureManifestResponse(val captureId: String, val gameVersion: String, val section: String, val stopReason: String, val images: List<StarCaptureImage>, val adjacentRelations: List<StarCaptureRelation>)
+data class StarCapturePendingResponse(
+    val captureId: String,
+    val section: String,
+    val imageCount: Int,
+    val createdAt: Instant,
+    val expiresAt: Instant,
+)
+data class StarCaptureManifestResponse(
+    val captureId: String,
+    val gameVersion: String,
+    val section: String,
+    val stopReason: String,
+    val images: List<StarCaptureImage>,
+    val adjacentRelations: List<StarCaptureRelation>,
+    val source: String? = null,
+    val sections: Map<String, StarCaptureSection>? = null,
+)
 data class StarCaptureConsumeResponse(val captureId: String, val consumed: Boolean)
-data class StarCaptureReadyEvent(val eventId: String, val accountId: String, val captureId: String, val section: String, val imageCount: Int, val occurredAt: Instant)
+data class StarCaptureReadyEvent(
+    val eventId: String,
+    val accountId: String,
+    val captureId: String,
+    val section: String,
+    val imageCount: Int,
+    val occurredAt: Instant,
+)

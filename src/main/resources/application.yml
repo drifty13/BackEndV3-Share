@@ -28,6 +28,8 @@ server:
   tomcat:
     # 限制 post 表单最大为 30KB
     max-http-form-post-size: 30KB
+    # 星石完整背包采集为 13 张 PNG 加 manifest，共 14 个 multipart parts。
+    max-part-count: 50
   compression:
     enabled: true
 
