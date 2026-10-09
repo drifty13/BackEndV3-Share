@@ -74,6 +74,9 @@ class OperatorUpgradeServiceTest {
 
     @BeforeEach
     fun setUp() {
+        every {
+            corrections.save(any<com.lhs.share.hub.repository.entity.OperatorCorrectionRecord>())
+        } answers { firstArg() }
         every { catalog.spFormsOf(any()) } returns emptyList()
         operatorCurrent = current(starLevel = 21)
         inventoryCurrent.clear()

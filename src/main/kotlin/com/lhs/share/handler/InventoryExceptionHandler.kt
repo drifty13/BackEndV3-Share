@@ -6,6 +6,7 @@ import com.lhs.share.hub.controller.inventory.InventoryController
 import com.lhs.share.hub.controller.inventory.response.InventoryError
 import com.lhs.share.hub.controller.inventory.response.InventoryErrorResponse
 import com.lhs.share.hub.controller.star.StarCaptureController
+import com.lhs.share.hub.controller.star.StarCompletionController
 import com.lhs.share.hub.controller.star.StarLoadoutController
 import com.lhs.share.hub.controller.star.StarLoadoutPresetController
 import com.lhs.share.hub.controller.star.StarStateController
@@ -35,6 +36,7 @@ private val inventoryLog = KotlinLogging.logger { }
         AccountController::class,
         InventoryController::class,
         StarStateController::class,
+        StarCompletionController::class,
         StarLoadoutController::class,
         StarLoadoutPresetController::class,
         StarCaptureController::class,
@@ -69,8 +71,15 @@ class InventoryExceptionHandler {
     }
 
     @ExceptionHandler(ConstraintViolationException::class, MethodArgumentTypeMismatchException::class, IllegalArgumentException::class)
-    fun invalidQuery(e: RuntimeException): ResponseEntity<InventoryErrorResponse> =
-        response(HttpStatus.UNPROCESSABLE_ENTITY, "schema_validation_failed", e.message ?: "Invalid request parameter")
+    fun invalidQuery(e: RuntimeException, request: HttpServletRequest): ResponseEntity<InventoryErrorResponse> = response(
+        HttpStatus.UNPROCESSABLE_ENTITY,
+        if (request.method == "POST" && request.requestURI == "/v1/star-state/completions") {
+            "star_completion_invalid_request"
+        } else {
+            "schema_validation_failed"
+        },
+        e.message ?: "Invalid request parameter",
+    )
 
     @ExceptionHandler(MissingServletRequestParameterException::class)
     fun missingQuery(e: MissingServletRequestParameterException): ResponseEntity<InventoryErrorResponse> =
@@ -101,6 +110,7 @@ class InventoryExceptionHandler {
 
     private fun HttpServletRequest.snapshotValidationCode(): String {
         return when {
+            requestURI.startsWith("/v1/star-state/completions") -> "star_completion_invalid_request"
             requestURI.startsWith("/v1/star-state") -> "star_state_invalid_snapshot"
             requestURI.startsWith("/v1/star-loadout-presets") -> "star_loadout_preset_invalid_snapshot"
             requestURI.startsWith("/v1/star-loadout") -> "star_loadout_invalid_snapshot"

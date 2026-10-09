@@ -600,7 +600,7 @@ class InventoryService(
             throw InventoryApiException(
                 HttpStatus.CONFLICT,
                 "consumption_record_delete_forbidden",
-                "Upgrade consumption records cannot be deleted without rolling back the operator upgrade",
+                "Consumption records cannot be deleted without rolling back their business operation",
                 recordId,
             )
         }
