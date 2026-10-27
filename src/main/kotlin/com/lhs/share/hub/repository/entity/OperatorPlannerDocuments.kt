@@ -5,6 +5,14 @@ import org.springframework.data.mongodb.core.index.CompoundIndex
 import org.springframework.data.mongodb.core.mapping.Document
 import java.time.Instant
 
+@Document("operator_custom_spend_templates")
+data class OperatorCustomSpendTemplates(
+    @Id val id: String,
+    val payloadJson: String,
+    val revision: Long,
+    val updatedAt: Instant,
+)
+
 /** Validated JSON snapshots preserve simulator numbers, map keys and historical predictions exactly. */
 @Document("operator_training_workspace")
 @CompoundIndex(name = "training_workspace_owner", def = "{'userId':1,'accountId':1}", unique = true)

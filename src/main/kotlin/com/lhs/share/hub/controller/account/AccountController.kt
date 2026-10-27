@@ -1,5 +1,6 @@
 package com.lhs.share.hub.controller.account
 
+import com.fasterxml.jackson.databind.JsonNode
 import com.lhs.share.config.security.AuthenticationHelper
 import com.lhs.share.controller.response.ApiResult
 import com.lhs.share.controller.response.ApiResult.Companion.success
@@ -8,9 +9,11 @@ import com.lhs.share.hub.controller.account.request.AccountPatchRequest
 import com.lhs.share.hub.controller.account.response.SubAccountResponse
 import com.lhs.share.hub.service.account.AccountEventService
 import com.lhs.share.hub.service.account.SubAccountService
+import com.lhs.share.hub.service.inventory.InventoryApiException
 import io.swagger.v3.oas.annotations.Operation
 import io.swagger.v3.oas.annotations.tags.Tag
 import jakarta.validation.Valid
+import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.DeleteMapping
@@ -18,6 +21,7 @@ import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PatchMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
+import org.springframework.web.bind.annotation.PutMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
@@ -45,6 +49,29 @@ class AccountController(
     @Operation(summary = "子账号列表")
     @GetMapping
     fun list(): ApiResult<List<SubAccountResponse>> = success(accountService.list(helper.requireUserId()))
+
+    @GetMapping("/{accountId}/daily-zhuyu-preference")
+    fun dailyZhuyuPreference(@PathVariable accountId: String): ApiResult<Map<String, String?>> =
+        success(accountService.dailyZhuyuPreference(helper.requireUserId(), accountId))
+
+    @PutMapping("/{accountId}/daily-zhuyu-preference")
+    fun saveDailyZhuyuPreference(@PathVariable accountId: String, @RequestBody body: JsonNode): ApiResult<Map<String, String?>> {
+        if (!body.isObject || body.size() != 3 || !body.has("expected") ||
+            !(body.path("expected").isNull || body.path("expected").isTextual) ||
+            !body.path("game").isTextual || !body.path("preference").isTextual
+        ) {
+            throw InventoryApiException(HttpStatus.UNPROCESSABLE_ENTITY, "schema_validation_failed", "茱萸记账设置无效")
+        }
+        return success(
+            accountService.saveDailyZhuyuPreference(
+                helper.requireUserId(),
+                accountId,
+                body.path("game").asText(),
+                if (body.path("expected").isNull) null else body.path("expected").asText(),
+                body.path("preference").asText(),
+            ),
+        )
+    }
 
     @Operation(
         summary = "订阅账号自动上报事件",

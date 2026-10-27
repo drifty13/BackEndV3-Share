@@ -90,7 +90,10 @@ class DrawResourceMongoTest {
         service.execute("owner", request("ordinary", ticket = "fuchuan"))
         service.execute("owner", request("reward", ticket = "fuchuan", action = "gain", channel = "活动奖励", quantity = 5))
         service.execute("owner", request("use", ticket = "fuchuan", action = "use", channel = "use", quantity = 3))
-        assertEquals(mapOf("baijinbi" to 6200L, "fuchuan" to 13L, "tianjifuchuan" to 10L), service.context("owner", "main").balances)
+        assertEquals(
+            mapOf("baijinbi" to 6200L, "fuchuan" to 13L, "tianjifuchuan" to 10L, "zhuyu" to 0L),
+            service.context("owner", "main").balances,
+        )
         val gains = records.findByUserIdAndAccountIdOrderByEffectiveAtAsc("owner", "main").filter { it.recordType == "reward_delta" }
         assertEquals(1, gains.size)
         assertEquals(5L, gains.single().entries.single().count)
@@ -99,6 +102,28 @@ class DrawResourceMongoTest {
             inventory.acquired("owner", "main", "item", Instant.parse("2026-01-01T00:00:00Z"), Instant.now().plusSeconds(1)).acquired,
         )
         assertEquals(0, inventory.export("owner", "main", null, true, null, null).records.count { it.recordType == "resource_delta" })
+    }
+
+    @Test
+    fun `zhuyu exchange is atomic idempotent and reversible`() {
+        snapshot(
+            "zhuyu-base",
+            "2026-01-02T00:00:00Z",
+            listOf(InventoryEntryRequest("baijinbi", count = 100), InventoryEntryRequest("zhuyu", count = 3)),
+        )
+        val command = request("zhuyu", ticket = "zhuyu", quantity = 2)
+        val result = service.execute("owner", command)
+        assertEquals(listOf(-2L, 100L), result.entries.map { it.count })
+        assertEquals(result, service.execute("owner", command))
+        assertEquals(1L, service.context("owner", "main").balances["zhuyu"])
+        assertEquals(200L, service.context("owner", "main").balances["baijinbi"])
+        assertCode("insufficient_inventory") { service.execute("owner", request("too-many", ticket = "zhuyu", quantity = 2)) }
+        inventory.deleteRecord("owner", "main", result.recordId)
+        assertEquals(3L, service.context("owner", "main").balances["zhuyu"])
+        assertEquals(100L, service.context("owner", "main").balances["baijinbi"])
+        inventory.restoreRecord("owner", "main", result.recordId)
+        assertEquals(1L, service.context("owner", "main").balances["zhuyu"])
+        assertEquals(200L, service.context("owner", "main").balances["baijinbi"])
     }
 
     @Test
@@ -119,7 +144,7 @@ class DrawResourceMongoTest {
     fun `invalid prices quantities unsupported rules and stale versions leave stock untouched`() {
         val original = service.context("owner", "main")
         listOf(
-            request("bad-ticket", ticket = "zhuyu"),
+            request("bad-ticket", ticket = "zhuyu", action = "use", channel = "use"),
             request("zero", quantity = 0),
             request("fraction-pack", ticket = "fuchuan", channel = "monthly-shop", quantity = 11),
             request("special-pack", channel = "monthly-shop", quantity = 10),

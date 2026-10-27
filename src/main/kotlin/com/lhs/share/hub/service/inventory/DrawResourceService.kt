@@ -92,7 +92,15 @@ class DrawResourceService(
                             recordType = if (request.action == "gain") "reward_delta" else "resource_delta", entityType = "item",
                             acquisitionChannel = when (request.action) {
                                 "use" -> "符传使用"
-                                "exchange" -> if (request.channel == "monthly-shop") "月卡商店兑换" else "白金币兑换"
+                                "exchange" -> if (request.ticketId ==
+                                    "zhuyu"
+                                ) {
+                                    "茱萸兑换白金币"
+                                } else if (request.channel == "monthly-shop") {
+                                    "月卡商店兑换"
+                                } else {
+                                    "白金币兑换"
+                                }
                                 else -> request.channel
                             },
                             effectiveAt = now, receivedAt = now,
@@ -120,7 +128,9 @@ class DrawResourceService(
     }
 
     private fun changes(request: DrawResourceRequest): List<RecordEntry> {
-        if (request.ticketId !in setOf("fuchuan", "tianjifuchuan") || request.quantity !in 1..Int.MAX_VALUE.toLong()) {
+        if (request.ticketId !in setOf("fuchuan", "tianjifuchuan", "zhuyu") || request.quantity !in 1..Int.MAX_VALUE.toLong() ||
+            (request.ticketId == "zhuyu" && (request.action != "exchange" || request.channel != "standard"))
+        ) {
             invalid("请选择符传或天机符传，数量必须为有效正整数")
         }
         val amount = request.quantity
@@ -135,6 +145,11 @@ class DrawResourceService(
                 listOf(ticket.copy(count = -amount))
             }
             "exchange" -> {
+                if (request.ticketId == "zhuyu") {
+                    val coins = amount * 50L
+                    if (coins > Int.MAX_VALUE) invalid("兑换所得超过支持上限")
+                    return listOf(ticket.copy(count = -amount), RecordEntry("baijinbi", "白金币", coins))
+                }
                 val coins = when (request.channel) {
                     "standard" -> amount * 200L
                     "monthly-shop" -> {
@@ -166,6 +181,6 @@ class DrawResourceService(
         throw InventoryApiException(HttpStatus.UNPROCESSABLE_ENTITY, "draw_resource_invalid_request", message)
 
     companion object {
-        private val RESOURCE_NAMES = linkedMapOf("baijinbi" to "白金币", "fuchuan" to "符传", "tianjifuchuan" to "天机符传")
+        private val RESOURCE_NAMES = linkedMapOf("baijinbi" to "白金币", "fuchuan" to "符传", "tianjifuchuan" to "天机符传", "zhuyu" to "茱萸")
     }
 }

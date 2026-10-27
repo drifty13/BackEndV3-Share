@@ -93,11 +93,12 @@ class OperatorPlannerValidator(
             request,
             setOf(
                 "schema_version", "rules_version", "timezone", "strategy", "agent_order", "preferences",
-                "manual_plans", "schedule", "expected_revision",
+                "manual_plans", "schedule", "expected_revision", "client_features",
             ),
         )
         version(request)
         revision(request)
+        if (request.has("client_features")) stringIds(request.path("client_features"), "client_features")
         integer(request.path("rules_version"), "rules_version", 13, 13)
         zone(request.path("timezone"))
         strategy(request.path("strategy"))
@@ -220,7 +221,13 @@ class OperatorPlannerValidator(
     }
 
     private fun dailyPlan(node: JsonNode) {
-        fields(node, setOf("gains", "spends"))
+        fields(node, setOf("gains", "spends", "custom_spend_overrides"))
+        if (node.has(
+                "custom_spend_overrides",
+            )
+        ) {
+            stringIds(node.path("custom_spend_overrides"), "custom_spend_overrides").forEach(::customSpendId)
+        }
         array(node.path("gains"), "gains").forEach { gain ->
             text(gain.path("id"), "gain.id")
             text(gain.path("label"), "gain.label")
@@ -254,10 +261,36 @@ class OperatorPlannerValidator(
     }
 
     private fun preferences(node: JsonNode) {
-        fields(node, setOf("luoyang", "shouchun", "purchase_count", "source_periods"))
+        fields(node, setOf("luoyang", "shouchun", "purchase_count", "source_periods", "custom_spend_rules"))
         integer(node.path("luoyang"), "luoyang", 0, 4)
         integer(node.path("shouchun"), "shouchun", 0, 4)
         integer(node.path("purchase_count"), "purchase_count", 0, 8)
+        if (node.has("custom_spend_rules")) {
+            val rules = array(node.path("custom_spend_rules"), "custom_spend_rules")
+            if (rules.size() > 32) invalid("最多保存32项每日安排", "custom_spend_rules")
+            val ids = mutableSetOf<String>()
+            rules.forEach { rule ->
+                fields(rule, setOf("id", "versions"))
+                val id = customSpendId(text(rule.path("id"), "id"))
+                if (!ids.add(id)) invalid("Duplicate rule id", "custom_spend_rules")
+                val versions = array(rule.path("versions"), "versions")
+                if (versions.isEmpty || versions.size() > 366) invalid("每日安排版本数量无效", "versions")
+                var previous: LocalDate? = null
+                versions.forEach { version ->
+                    if (!version.path("enabled").isBoolean) invalid("Expected boolean", "enabled")
+                    val enabled = version.path("enabled").asBoolean()
+                    val hasSnapshot = enabled || version.has("item")
+                    fields(version, if (hasSnapshot) setOf("from_date", "enabled", "count", "item") else setOf("from_date", "enabled"))
+                    val from = date(text(version.path("from_date"), "from_date"))
+                    if (previous?.let { from <= it } == true) invalid("Rule versions must be ordered and unique", "versions")
+                    previous = from
+                    if (hasSnapshot) {
+                        integer(version.path("count"), "count", 0, 9999)
+                        customSpendItem(version.path("item"), false)
+                    }
+                }
+            }
+        }
         if (node.has("source_periods")) {
             var previous: LocalDate? = null
             array(node.path("source_periods"), "source_periods").forEach { period ->
@@ -268,6 +301,54 @@ class OperatorPlannerValidator(
                 staminaSources(period.path("sources"))
             }
         }
+    }
+
+    fun customSpendTemplates(request: ObjectNode): ObjectNode {
+        fields(request, setOf("schema_version", "expected_revision", "templates"))
+        version(request)
+        revision(request)
+        val templates = array(request.path("templates"), "templates")
+        if (templates.size() > 32) invalid("最多保存32项常用支出", "templates")
+        val ids = mutableSetOf<String>()
+        templates.forEach { item ->
+            customSpendItem(item, true)
+            if (!ids.add(item.path("id").asText())) invalid("Duplicate template id", "templates")
+        }
+        return request.also { it.remove("expected_revision") }
+    }
+
+    private fun customSpendId(id: String): String {
+        if (!id.matches(Regex("custom-spend-[A-Za-z0-9-]{1,100}"))) invalid("Invalid custom spend id", "id")
+        return id
+    }
+
+    private fun customSpendItem(node: JsonNode, withId: Boolean) {
+        fields(node, if (withId) setOf("id", "label", "cost_per", "yield") else setOf("label", "cost_per", "yield"))
+        if (withId) customSpendId(text(node.path("id"), "id"))
+        val label = text(node.path("label"), "label").trim()
+        if (label.length !in 1..32) invalid("名称须为1至32字", "label")
+        (node as ObjectNode).put("label", label)
+        number(node.path("cost_per"), "cost_per")
+        quantities(node.path("yield"))
+        node.path("yield").fieldNames().forEach { id ->
+            if (id != "__xp__" && !items.exists("item", id)) invalid("Unknown custom output: $id", "yield")
+        }
+    }
+
+    fun hasCustomDailySpends(node: JsonNode): Boolean {
+        if (!node.path("preferences").path("custom_spend_rules").isEmpty ||
+            !node.path("schedule").path("context").path("preferences").path("custom_spend_rules").isEmpty
+        ) {
+            return true
+        }
+        fun containsOverride(value: JsonNode): Boolean = when {
+            value.isObject -> value.fields().asSequence().any { (key, child) ->
+                (key == "custom_spend_overrides" && !child.isEmpty) || containsOverride(child)
+            }
+            value.isArray -> value.any(::containsOverride)
+            else -> false
+        }
+        return containsOverride(node)
     }
 
     private fun staminaSources(node: JsonNode) {

@@ -173,6 +173,12 @@ class OperatorPlannerService(
     private fun writeSchedule(userId: String, accountId: String, planId: String, expected: Long, content: ObjectNode): ObjectNode {
         val old = schedules.findByUserIdAndAccountIdAndPlanId(userId, accountId, planId)
         if ((old?.revision ?: 0L) != expected) conflict(SCHEDULE_CONFLICT)
+        val usesCustomRules = validator.hasCustomDailySpends(content) ||
+            old?.let { validator.hasCustomDailySpends(mapper.readTree(it.payloadJson)) } == true
+        if (usesCustomRules && content.path("client_features").none { it.asText() == "custom-daily-spends-v1" }) {
+            throw OperatorApiException(HttpStatus.CONFLICT, "custom_daily_spends_client_outdated", "当前页面不支持持续每日安排，请更新页面后重新保存")
+        }
+        content.remove("client_features")
         if (old != null && mapper.readTree(old.payloadJson).path("preferences").has("source_periods") &&
             !content.path("preferences").has("source_periods")
         ) {

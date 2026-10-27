@@ -14,10 +14,15 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import org.springframework.dao.DuplicateKeyException
+import org.springframework.data.mongodb.MongoTransactionManager
 import org.springframework.data.mongodb.core.MongoTemplate
 import org.springframework.data.mongodb.core.index.MongoPersistentEntityIndexResolver
 import org.springframework.data.mongodb.core.query.Criteria
 import org.springframework.data.mongodb.core.query.Query
+import org.springframework.transaction.support.TransactionTemplate
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 @Tag("integration")
 class AccountIndexMongoTest {
@@ -35,6 +40,102 @@ class AccountIndexMongoTest {
     fun cleanup() {
         TestMongo.dropDatabase(client, database)
         client.close()
+    }
+
+    @Test
+    fun `zhuyu preference compare and set is scoped to owner account and game`() {
+        mongo.insert(SubAccount(userId = "owner", accountId = "a", name = "A"))
+        mongo.insert(SubAccount(userId = "owner", accountId = "b", name = "B"))
+        mongo.insert(SubAccount(userId = "other", accountId = "a", name = "A"))
+        val repository = SubAccountRepositoryImpl(mongo)
+        assertEquals("baijinbi", repository.updateDailyZhuyuPreference("owner", "a", "代号鸢", null, "baijinbi")?.dailyZhuyuPreference)
+        assertEquals(null, repository.updateDailyZhuyuPreference("owner", "a", "代号鸢", null, "zhuyu"))
+        assertEquals(null, repository.updateDailyZhuyuPreference("owner", "a", "如鸢", "baijinbi", "zhuyu"))
+        assertEquals(null, repository.updateDailyZhuyuPreference("intruder", "a", "代号鸢", null, "zhuyu"))
+        assertEquals(
+            null,
+            mongo.findOne(
+                Query(Criteria.where("userId").`is`("owner").and("accountId").`is`("b")),
+                SubAccount::class.java,
+            )!!.dailyZhuyuPreference,
+        )
+        assertEquals(
+            null,
+            mongo.findOne(
+                Query(Criteria.where("userId").`is`("other").and("accountId").`is`("a")),
+                SubAccount::class.java,
+            )!!.dailyZhuyuPreference,
+        )
+        assertEquals("zhuyu", repository.updateDailyZhuyuPreference("owner", "a", "代号鸢", "baijinbi", "zhuyu")?.dailyZhuyuPreference)
+    }
+
+    @Test
+    fun `game switch preserves old zhuyu preferences and rolls back atomically`() {
+        mongo.insert(SubAccount(userId = "owner", accountId = "a", name = "A", dailyZhuyuPreference = "baijinbi"))
+        mongo.insert(SubAccount(userId = "other", accountId = "a", name = "A", dailyZhuyuPreference = "zhuyu"))
+        val repository = SubAccountRepositoryImpl(mongo)
+        val transaction = TransactionTemplate(MongoTransactionManager(mongo.mongoDatabaseFactory))
+        fun read(user: String) =
+            mongo.findOne(Query(Criteria.where("userId").`is`(user).and("accountId").`is`("a")), SubAccount::class.java)!!
+        fun switch(game: String, fail: Boolean = false) {
+            transaction.executeWithoutResult {
+                val account = read("owner")
+                assertTrue(repository.fenceRecruitmentWrite("owner", "a", account.game))
+                val preferences = account.dailyZhuyuPreferencesByGame.toMutableMap()
+                account.dailyZhuyuPreference?.let { preferences[account.game] = it }
+                repository.switchDailyZhuyuPreference("owner", "a", preferences, preferences[game])
+                repository.updateDetails("owner", "a", account.name, game, java.time.Instant.EPOCH)
+                if (fail) throw IllegalStateException("rollback")
+            }
+        }
+        assertThrows(IllegalStateException::class.java) { switch("如鸢", true) }
+        assertEquals("代号鸢", read("owner").game)
+        assertEquals("baijinbi", read("owner").dailyZhuyuPreference)
+        assertTrue(read("owner").dailyZhuyuPreferencesByGame.isEmpty())
+        switch("如鸢")
+        assertEquals(null, read("owner").dailyZhuyuPreference)
+        assertEquals(null, repository.updateDailyZhuyuPreference("owner", "a", "代号鸢", "baijinbi", "zhuyu"))
+        assertEquals("zhuyu", repository.updateDailyZhuyuPreference("owner", "a", "如鸢", null, "zhuyu")?.dailyZhuyuPreference)
+        switch("代号鸢")
+        assertEquals("baijinbi", read("owner").dailyZhuyuPreference)
+        switch("如鸢")
+        assertEquals("zhuyu", read("owner").dailyZhuyuPreference)
+        assertEquals("zhuyu", read("other").dailyZhuyuPreference)
+    }
+
+    @Test
+    fun `concurrent old game preference write cannot cross a game switch`() {
+        mongo.insert(SubAccount(userId = "owner", accountId = "a", name = "A", dailyZhuyuPreference = "baijinbi"))
+        val repository = SubAccountRepositoryImpl(mongo)
+        val transaction = TransactionTemplate(MongoTransactionManager(mongo.mongoDatabaseFactory))
+        val fenced = CountDownLatch(1)
+        val finishSwitch = CountDownLatch(1)
+        val workers = Executors.newFixedThreadPool(2)
+        try {
+            val switching = workers.submit {
+                transaction.executeWithoutResult {
+                    assertTrue(repository.fenceRecruitmentWrite("owner", "a", "代号鸢"))
+                    fenced.countDown()
+                    assertTrue(finishSwitch.await(10, TimeUnit.SECONDS))
+                    repository.switchDailyZhuyuPreference("owner", "a", mapOf("代号鸢" to "baijinbi"), null)
+                    repository.updateDetails("owner", "a", "A", "如鸢", java.time.Instant.EPOCH)
+                }
+            }
+            assertTrue(fenced.await(10, TimeUnit.SECONDS))
+            val writing = workers.submit<SubAccount?> {
+                repository.updateDailyZhuyuPreference("owner", "a", "代号鸢", "baijinbi", "zhuyu")
+            }
+            finishSwitch.countDown()
+            switching.get(20, TimeUnit.SECONDS)
+            assertEquals(null, writing.get(20, TimeUnit.SECONDS))
+            val account = mongo.findOne(Query(Criteria.where("userId").`is`("owner").and("accountId").`is`("a")), SubAccount::class.java)!!
+            assertEquals("如鸢", account.game)
+            assertEquals(null, account.dailyZhuyuPreference)
+            assertEquals("baijinbi", account.dailyZhuyuPreferencesByGame["代号鸢"])
+        } finally {
+            finishSwitch.countDown()
+            workers.shutdownNow()
+        }
     }
 
     @Test

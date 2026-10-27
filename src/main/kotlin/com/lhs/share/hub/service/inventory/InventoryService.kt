@@ -852,17 +852,17 @@ class InventoryService(
 
     private fun applyResourceDelta(userId: String, accountId: String, entity: InventoryRecord) {
         val current = currentRepository.findByUserIdAndAccountIdAndEntityType(userId, accountId, entity.entityType)
-            ?: throw InventoryApiException(HttpStatus.CONFLICT, "resource_replay_conflict", "后续符传操作依赖这次盘点，无法撤销")
+            ?: throw InventoryApiException(HttpStatus.CONFLICT, "resource_replay_conflict", "后续资源操作依赖这次盘点，无法撤销")
         val entries = current.entries.toMutableMap()
         var applied = false
         entity.entries.forEach { change ->
             val baseline = maxOfNotNull(current.fullBaselineAt, entries[change.id]?.listedBaselineAt)
-                ?: throw InventoryApiException(HttpStatus.CONFLICT, "resource_replay_conflict", "后续符传操作缺少库存基准，无法撤销")
+                ?: throw InventoryApiException(HttpStatus.CONFLICT, "resource_replay_conflict", "后续资源操作缺少库存基准，无法撤销")
             if (entity.effectiveAt.isAfter(baseline)) {
                 val old = entries[change.id] ?: StockEntry()
                 val count = old.count + change.count
                 if (count !in 0..MAX_COUNT) {
-                    throw InventoryApiException(HttpStatus.CONFLICT, "resource_replay_conflict", "后续符传操作依赖这笔收入，无法完成删除或恢复")
+                    throw InventoryApiException(HttpStatus.CONFLICT, "resource_replay_conflict", "后续资源操作依赖这笔收入，无法完成删除或恢复")
                 }
                 entries[change.id] = old.copy(count = count)
                 applied = true

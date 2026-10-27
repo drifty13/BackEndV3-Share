@@ -84,6 +84,35 @@ class OperatorPlannerMongoTest {
     }
 
     @Test
+    fun `custom template CAS has one winner on first insert and update with main account isolation`() {
+        val repository = com.lhs.share.hub.repository.OperatorCustomSpendTemplatesRepository(template)
+        assertNull(repository.find("owner"))
+        for (revision in 0L..1L) {
+            val barrier = CyclicBarrier(2)
+            val executor = Executors.newFixedThreadPool(2)
+            try {
+                val results = executor.invokeAll(
+                    (1..2).map { value ->
+                        Callable {
+                            barrier.await()
+                            repository.replace("owner", revision, "{\"value\":$value}", java.time.Instant.now())
+                        }
+                    },
+                ).map { it.get() }
+                assertEquals(1, results.count { it != null })
+                assertEquals(revision + 1, repository.find("owner")?.revision)
+                assertNull(repository.find("main-b"))
+            } finally {
+                executor.shutdownNow()
+            }
+        }
+        assertNotNull(repository.replace("main-b", 0, "{}", java.time.Instant.now()))
+        accounts.delete(accounts.findByUserIdAndAccountId("owner", "account")!!)
+        assertEquals(2, repository.find("owner")?.revision)
+        assertEquals(1, repository.find("main-b")?.revision)
+    }
+
+    @Test
     fun `concurrent first creates and subsequent updates each have exactly one winner`() {
         for (revision in 0L..1L) {
             val barrier = CyclicBarrier(2)

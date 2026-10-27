@@ -35,6 +35,8 @@ data class SubAccount(
     // A write fence shared by recruitment mutations and account lifecycle transactions.
     val recruitmentFence: Long = 0,
     val operatorPanelAutoFill: Boolean = true,
+    val dailyZhuyuPreference: String? = null,
+    val dailyZhuyuPreferencesByGame: Map<String, String> = emptyMap(),
     val mailboxReserve: MailboxReserve? = null,
 )
 

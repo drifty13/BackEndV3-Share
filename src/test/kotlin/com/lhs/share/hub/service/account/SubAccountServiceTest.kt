@@ -396,6 +396,24 @@ class SubAccountServiceTest {
     }
 
     @Test
+    fun `game switch preserves each games zhuyu preference`() {
+        val account = SubAccount(
+            userId = "u1",
+            accountId = "main",
+            name = "大号",
+            dailyZhuyuPreference = "baijinbi",
+            dailyZhuyuPreferencesByGame = mapOf("如鸢" to "zhuyu"),
+        )
+        every { accountRepository.findByUserIdAndAccountId("u1", "main") } returns account
+        every { accountRepository.updateDetails("u1", "main", "大号", "如鸢", any()) } just runs
+        every { accountRepository.switchDailyZhuyuPreference(any(), any(), any(), any()) } just runs
+        service.update("u1", "main", null, "如鸢")
+        verify(exactly = 1) {
+            accountRepository.switchDailyZhuyuPreference("u1", "main", mapOf("代号鸢" to "baijinbi", "如鸢" to "zhuyu"), "zhuyu")
+        }
+    }
+
+    @Test
     fun `retained calendar subscription history locks game but allows renaming`() {
         every { accountRepository.findByUserIdAndAccountId("u1", "main") } returns
             SubAccount(userId = "u1", accountId = "main", name = "大号", game = "代号鸢")

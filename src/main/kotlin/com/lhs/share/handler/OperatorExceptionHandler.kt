@@ -27,6 +27,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice
         com.lhs.share.hub.controller.operator.OperatorPanelController::class,
         com.lhs.share.hub.controller.operator.OperatorRelationshipController::class,
         OperatorPlannerController::class,
+        com.lhs.share.hub.controller.operator.OperatorCustomSpendTemplatesController::class,
         OperatorReserveWorkspaceController::class,
         OperatorDailyTasksController::class,
         OperatorOrganizationController::class,

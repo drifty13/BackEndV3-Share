@@ -10,7 +10,7 @@ MongoDB 新增 `operator_training_workspace`、`operator_stamina_schedule`、`op
 
 不改动已有库存、密探 v2/v3 导入导出、默认 growth-targets、annotations 和 favorites 数据。升级部署会由现有 Spring Data 配置创建新集合索引；单文档首写还使用确定性 `_id` 防止并发重复。回滚代码可保留这三个集合，旧版本忽略它们；无需变更已有业务数据。
 
-全部端点使用 JWT、`account_id` 查询参数及既有 ApiResult 包装。不存在或不可访问的子账号返回 404 `account_not_found`。接口不接受客户端 user_id。
+全部端点使用 JWT 及既有 ApiResult 包装。工作区与日程接口使用 `account_id`；大账号常用支出接口不依赖子账号。不存在或不可访问的子账号返回 404 `account_not_found`。接口不接受客户端 user_id。
 
 ## 工作区
 
@@ -147,3 +147,26 @@ PLANNER_TEST_MONGO_URI='mongodb://127.0.0.1:27017/?replicaSet=rs0&serverSelectio
 ## 独立化极（本次兼容更新）
 
 新Current/PATCH/目标使用huaji owned/stage/awakened；普通终点25、隐密24、SP稀疏stage且材料422保护。level/elite共享只计一次，stage/awake目标独立。旧25..30永久适配五星，31仅确认觉醒且stage可未知，历史异常不批量清理。无损交换使用operator-only v4；旧v2 camelCase/v3字段及幂等契约保留，旧观测不伪造新验证。详情见[化极兼容规范](./operator-huaji-compatibility.md)。
+
+
+## 大账号常用支出与持续每日安排
+
+`GET/PUT /v1/operator/custom-spend-templates` 只从 JWT 获取大账号 userId，不接受正文中的 owner/user_id/account_id。相同大账号的所有游戏子账号共享模板；子账号分享权限不授予此接口的访问权。GET 返回 `schema_version:1, revision, updated_at, templates`，空读 revision=0、不建档；成功与业务错误均使用 no-store。PUT 格式：
+
+```json
+{"schema_version":1,"expected_revision":0,"templates":[{"id":"custom-spend-lantai","label":"兰台扫荡","cost_per":10,"yield":{"__xp__":1000}}]}
+```
+
+独立 Mongo 集合 `operator_custom_spend_templates` 以 JWT userId 为 `_id`；首次 insert 唯一性和后续 revision 原子 CAS 均只能有一个并发赢家。冲突返回 HTTP 409 `custom_spend_templates_revision_conflict`。空 templates 明确清空列表。最多32项、ID唯一且须为 `custom-spend-` 开头的字母数字/连字符（后缀1–100字）；名称去空白后1–32字；体力和产出是有限非负数，产出只接受已知物品或 `__xp__`。模板不存每日次数。删除子账号不清理该集合；当前代码无大账号删除入口。
+
+日程 preferences 新增可选 `custom_spend_rules`，按当前子账号及培养清单保存，每项保留独立版本和项目副本：
+
+```json
+{"custom_spend_rules":[{"id":"custom-spend-lantai","versions":[{"from_date":"2026-10-27","enabled":true,"count":10,"item":{"label":"兰台扫荡","cost_per":10,"yield":{"__xp__":1000}}},{"from_date":"2026-11-01","enabled":false}]}]}
+```
+
+最多32项，每项1–366个有序且日期唯一的版本，次数0–9999整数；停用版本通常只有 from_date/enabled；取消尚未开始的规则时可另存 item/count 副本用于恢复，仍不计成本或产出。日期沿用北京时间05:00业务日。改动从指定日期替换该项目后续版本，历史版本及其他项目保留。模板改名/删除不暗改规则副本；规则无需模板仍存在即可计算。启用或修改前端校验当前90天全部预算（包含备齐后的手工日），失败不部分提交；后端校验结构及所有权，继续允许一般手工超支草稿存档。
+
+每日 plan 新增可选 `custom_spend_overrides: ["custom-spend-lantai"]`；相应行仍存于 spends。标记存在而行不存在表示跳过当天，恢复移除标记。归一化、云端往返、范围应用和精确方案均保留标记。重设清除未来手工例外，保留长期规则；过去已存快照不可改写。旧90天批量安排不会自动迁移成长期规则。
+
+新日程 PUT（包括 import-local 内嵌日程）携带请求级 `client_features:["custom-daily-spends-v1"]`，该标记不持久化。已有或新快照含规则/单日覆盖时，未声明能力的写入返回 HTTP409 `custom_daily_spends_client_outdated`，包括仅保存在 `schedule.context.preferences.custom_spend_rules` 中的规则；即便旧客户端回传未知规则也拒绝，避免旧算法静默忽略约束。先发布本后端，再发布前端；旧后端拒绝时不得删字段降级保存。模板与日程的 revision 和失败恢复完全独立，不承诺跨文档原子保存。
